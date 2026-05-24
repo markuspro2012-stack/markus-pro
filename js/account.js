@@ -1,6 +1,7 @@
 /* ============================================================
    MARKUS PRO — account.js
    User account page: profile, order history, settings.
+   Supabase auth (primary) with localStorage fallback.
    Requires: utils.js, products.js, app.js
 ============================================================ */
 
@@ -8,8 +9,6 @@
   'use strict';
 
   var USER_KEY     = 'mp_user';
-  var USERS_KEY    = 'mp_users';
-  var ORDERS_KEY   = 'mp_orders';
   var CART_KEY     = 'mp_cart';
   var WISHLIST_KEY = 'mp_wishlist';
 
@@ -21,15 +20,54 @@
     cancelled: 'Cancelled'
   };
 
-  var state = { user: null, orders: [] };
+  var state = { user: null, sbUser: null, orders: [] };
 
-  /* ── Auth guard ──────────────────────────────────────────── */
+  /* ── Supabase available? ─────────────────────────────────── */
 
-  function guardAuth() {
+  function useSb() { return !!(window.sb); }
+
+  /* ── Auth guard (async-capable) ─────────────────────────── */
+
+  function guardAuth(cb) {
+    if (useSb()) {
+      window.sb.auth.getSession().then(function (res) {
+        var session = res.data && res.data.session;
+        if (!session) { window.location.replace('login.html'); return; }
+        var u = session.user;
+        state.sbUser = u;
+        state.user = {
+          name:     (u.user_metadata && u.user_metadata.full_name) || u.email.split('@')[0],
+          email:    u.email,
+          provider: (u.app_metadata && u.app_metadata.provider) || 'email'
+        };
+        loadSupabaseData(cb);
+      }).catch(function () { window.location.replace('login.html'); });
+      return;
+    }
+
+    /* localStorage fallback */
     var user = storage.get(USER_KEY, null);
-    if (!user) { window.location.replace('login.html'); return false; }
+    if (!user) { window.location.replace('login.html'); return; }
     state.user = user;
-    return true;
+    cb();
+  }
+
+  /* ── Load Supabase profile + orders ─────────────────────── */
+
+  function loadSupabaseData(cb) {
+    var uid = state.sbUser.id;
+    Promise.all([
+      window.sb.from('profiles').select('name, provider').eq('id', uid).single(),
+      window.sb.from('orders').select('*').eq('user_id', uid).order('created_at', { ascending: false })
+    ]).then(function (results) {
+      var profile = results[0].data;
+      if (profile) {
+        if (profile.name)     state.user.name     = profile.name;
+        if (profile.provider) state.user.provider = profile.provider;
+      }
+      state.orders = results[1].data || [];
+      cb();
+    }).catch(function () { cb(); });
   }
 
   /* ── Panel switching ─────────────────────────────────────── */
@@ -52,18 +90,15 @@
     var u       = state.user;
     var initial = (u.name || 'U').charAt(0).toUpperCase();
 
-    /* Sidebar */
     setText('sidebar-avatar', initial);
     setText('sidebar-name',   u.name  || 'User');
     setText('sidebar-email',  u.email || '—');
 
-    /* Profile panel */
     setText('profile-avatar',   initial);
     setText('profile-name',     u.name  || 'User');
     setText('profile-email',    u.email || '—');
     setText('profile-provider', u.provider || 'Email');
 
-    /* Stats */
     var cartQty  = storage.get(CART_KEY, []).reduce(function (s, i) { return s + (i.qty || 1); }, 0);
     var wishQty  = storage.get(WISHLIST_KEY, []).length;
     var ordCount = state.orders.length;
@@ -72,7 +107,6 @@
     setText('stat-wishlist', wishQty);
     setText('stat-orders',   ordCount);
 
-    /* Nav badge */
     var badge = document.getElementById('nav-orders-count');
     if (badge) {
       badge.style.display = ordCount > 0 ? 'inline-flex' : 'none';
@@ -111,7 +145,7 @@
       var items   = Array.isArray(order.items) ? order.items : [];
       var preview = items.slice(0, 3);
       var more    = items.length - preview.length;
-      var date    = formatOrderDate(order.date || order.created_at);
+      var date    = formatOrderDate(order.created_at || order.date);
       var status  = order.status || 'pending';
 
       var thumbsHtml = preview.map(function (it) {
@@ -119,12 +153,10 @@
           ? PRODUCTS.find(function (p) { return p.id === it.id; })
           : null;
         var src = (product && product.image) || ('https://picsum.photos/seed/' + (it.id || 1) + '/56/56');
-        return '<img class="order-item-thumb" src="' + src + '" alt="' + esc(it.name || '') + '" loading="lazy">';
+        return '<img class="order-item-thumb" src="' + esc(src) + '" alt="' + esc(it.name || '') + '" loading="lazy">';
       }).join('');
 
-      if (more > 0) {
-        thumbsHtml += '<div class="order-item-more">+' + more + '</div>';
-      }
+      if (more > 0) thumbsHtml += '<div class="order-item-more">+' + more + '</div>';
 
       html +=
         '<div class="order-card">'
@@ -152,11 +184,10 @@
     var nameInput = document.getElementById('setting-name');
     if (nameInput) nameInput.value = state.user.name || '';
 
-    /* Hide password section for social login users */
+    var provider = (state.user.provider || 'email').toLowerCase();
+    var isSocial = provider === 'google' || provider === 'apple';
     var pwSection = document.getElementById('section-password');
-    if (pwSection && state.user.provider && state.user.provider !== 'Email') {
-      pwSection.style.display = 'none';
-    }
+    if (pwSection) pwSection.style.display = isSocial ? 'none' : '';
   }
 
   /* ── Save display name ───────────────────────────────────── */
@@ -166,14 +197,19 @@
     var name  = input ? input.value.trim() : '';
     if (!name) { showToast('Name cannot be empty', '⚠'); return; }
 
+    if (useSb() && state.sbUser) {
+      window.sb.from('profiles').update({ name: name }).eq('id', state.sbUser.id)
+        .then(function () {
+          state.user.name = name;
+          renderProfile();
+          showToast('Name updated', '✓');
+        }).catch(function (err) { showToast('Update failed: ' + (err.message || ''), '✕'); });
+      return;
+    }
+
+    /* localStorage fallback */
     state.user.name = name;
     storage.set(USER_KEY, state.user);
-
-    /* Also update mp_users array (email accounts) */
-    var users = storage.get(USERS_KEY, []);
-    var found = users.find(function (u) { return u.email === state.user.email; });
-    if (found) { found.name = name; storage.set(USERS_KEY, users); }
-
     renderProfile();
     showToast('Name updated', '✓');
   }
@@ -181,31 +217,34 @@
   /* ── Change password ─────────────────────────────────────── */
 
   function doChangePassword() {
-    var curr    = val('pass-current');
     var next    = val('pass-new');
     var confirm = val('pass-confirm');
 
-    if (!curr || !next || !confirm) { showToast('Fill in all fields', '⚠'); return; }
-    if (next.length < 8)            { showToast('Password must be at least 8 characters', '⚠'); return; }
-    if (next !== confirm)           { showToast('Passwords do not match', '⚠'); return; }
+    if (!next || !confirm) { showToast('Fill in all fields', '⚠'); return; }
+    if (next.length < 8)   { showToast('Password must be at least 8 characters', '⚠'); return; }
+    if (next !== confirm)  { showToast('Passwords do not match', '⚠'); return; }
 
-    var users = storage.get(USERS_KEY, []);
-    var found = users.find(function (u) { return u.email === state.user.email; });
-    if (!found)                        { showToast('Account not found', '✕'); return; }
-    if (found.password !== curr)       { showToast('Current password is incorrect', '✕'); return; }
-
-    found.password = next;
-    storage.set(USERS_KEY, users);
-    ['pass-current', 'pass-new', 'pass-confirm'].forEach(function (id) {
-      var el = document.getElementById(id);
-      if (el) el.value = '';
-    });
-    showToast('Password changed successfully', '✓');
+    if (useSb()) {
+      window.sb.auth.updateUser({ password: next }).then(function (result) {
+        if (result.error) { showToast(result.error.message, '✕'); return; }
+        clearPasswordFields();
+        showToast('Password changed successfully', '✓');
+      });
+      return;
+    }
+    showToast('Password change is only available when signed in via email', '⚠');
   }
 
   /* ── Sign out ────────────────────────────────────────────── */
 
   function doSignOut() {
+    if (useSb()) {
+      window.sb.auth.signOut().then(function () {
+        storage.remove(USER_KEY);
+        window.location.replace('index.html');
+      });
+      return;
+    }
     storage.remove(USER_KEY);
     window.location.replace('index.html');
   }
@@ -214,9 +253,10 @@
 
   function doDeleteAccount() {
     if (!window.confirm('Delete your account? This cannot be undone.')) return;
-    var email = state.user.email;
-    var users = storage.get(USERS_KEY, []).filter(function (u) { return u.email !== email; });
-    storage.set(USERS_KEY, users);
+    if (useSb()) {
+      showToast('To delete your account, contact support at markuspro2012@gmail.com', '⚠');
+      return;
+    }
     storage.remove(USER_KEY);
     window.location.replace('index.html');
   }
@@ -234,11 +274,16 @@
   }
 
   function esc(str) {
-    return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
+    return String(str || '')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function clearPasswordFields() {
+    ['pass-current', 'pass-new', 'pass-confirm'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.value = '';
+    });
   }
 
   function formatOrderDate(iso) {
@@ -247,21 +292,12 @@
       return new Date(iso).toLocaleDateString('en-GB', {
         day: 'numeric', month: 'short', year: 'numeric'
       });
-    } catch (e) { return iso; }
+    } catch (e) { return String(iso); }
   }
 
-  /* ── Bootstrap ───────────────────────────────────────────── */
+  /* ── Main init (called after auth + data load) ───────────── */
 
-  document.addEventListener('DOMContentLoaded', function () {
-    if (!guardAuth()) return;
-
-    /* Load orders that belong to this user */
-    var allOrders = storage.get(ORDERS_KEY, []);
-    state.orders  = allOrders.filter(function (o) {
-      return o.customer && o.customer.email === state.user.email;
-    });
-
-    /* Deep-link via URL hash (e.g. account.html#orders) */
+  function continueInit() {
     var hash = window.location.hash.replace('#', '');
     if (['orders', 'settings'].indexOf(hash) !== -1) switchPanel(hash);
 
@@ -291,7 +327,6 @@
     var btnPass = document.getElementById('btn-change-pass');
     if (btnPass) btnPass.addEventListener('click', doChangePassword);
 
-    /* Enter key on name field */
     var nameInput = document.getElementById('setting-name');
     if (nameInput) {
       nameInput.addEventListener('keydown', function (e) {
@@ -299,9 +334,14 @@
       });
     }
 
-    /* Delete account */
     var btnDel = document.getElementById('btn-delete-account');
     if (btnDel) btnDel.addEventListener('click', doDeleteAccount);
+  }
+
+  /* ── Bootstrap ───────────────────────────────────────────── */
+
+  document.addEventListener('DOMContentLoaded', function () {
+    guardAuth(continueInit);
   });
 
-})();
+}());
