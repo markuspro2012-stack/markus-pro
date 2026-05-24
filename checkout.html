@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Checkout &mdash; Markus Pro</title>
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="stylesheet" href="css/tokens.css">
+  <link rel="stylesheet" href="css/reset.css">
+  <link rel="stylesheet" href="css/typography.css">
+  <link rel="stylesheet" href="css/components.css">
+  <link rel="stylesheet" href="css/layout.css">
+  <link rel="stylesheet" href="css/animations.css">
+  <link rel="stylesheet" href="css/pages/checkout.css">
+</head>
+<body class="checkout-wrap">
+
+<!-- ── Nav ─────────────────────────────────────────────────── -->
+<header class="checkout-nav">
+  <a href="index.html" class="checkout-nav-logo">MARKUS<span>PRO</span></a>
+  <span class="checkout-nav-secure">
+    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="10" height="6" rx="1"/><path d="M5 7V5a3 3 0 016 0v2"/></svg>
+    Secure Checkout
+  </span>
+</header>
+
+<!-- ── Progress ─────────────────────────────────────────────── -->
+<div class="checkout-progress">
+  <div class="progress-step" data-step="1">
+    <span class="step-num">1</span>
+    <span class="step-label">DELIVERY</span>
+  </div>
+  <div class="progress-sep"></div>
+  <div class="progress-step" data-step="2">
+    <span class="step-num">2</span>
+    <span class="step-label">PAYMENT</span>
+  </div>
+  <div class="progress-sep"></div>
+  <div class="progress-step" data-step="3">
+    <span class="step-num">3</span>
+    <span class="step-label">CONFIRMED</span>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     STEP 1 — DELIVERY
+═══════════════════════════════════════════════════════════ -->
+<section class="checkout-step" id="step-1">
+  <h2 class="checkout-step-title">Delivery Details</h2>
+
+  <!-- Sign-in prompt (hidden for logged-in users) -->
+  <div class="signin-banner" id="signin-banner">
+    <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+    <span>Already have an account?</span>
+    <a href="login.html">Sign in</a>
+    <span style="color:var(--color-border)">for a faster checkout</span>
+    <button class="signin-banner-dismiss" id="dismiss-banner">Continue as guest &rarr;</button>
+  </div>
+
+  <form id="form-delivery" novalidate>
+    <!-- Contact -->
+    <div class="checkout-form-section">
+      <p class="checkout-form-section-title">Contact Information</p>
+      <div class="form-grid">
+        <div class="field-group field-full">
+          <label for="f-name">Full Name *</label>
+          <input id="f-name" name="fullname" type="text" placeholder="John Doe" autocomplete="name" required>
+        </div>
+        <div class="field-group">
+          <label for="f-email">Email *</label>
+          <input id="f-email" name="email" type="email" placeholder="you@example.com" autocomplete="email" required>
+        </div>
+        <div class="field-group">
+          <label for="f-phone">Phone</label>
+          <input id="f-phone" name="phone" type="tel" placeholder="+1 234 567 8900" autocomplete="tel">
+        </div>
+      </div>
+    </div>
+
+    <!-- Shipping address -->
+    <div class="checkout-form-section">
+      <p class="checkout-form-section-title">Shipping Address</p>
+      <div class="form-grid">
+        <div class="field-group field-full">
+          <label for="f-address">Street Address *</label>
+          <input id="f-address" name="address" type="text" placeholder="123 Main Street" autocomplete="street-address" required>
+        </div>
+        <div class="field-group">
+          <label for="f-city">City *</label>
+          <input id="f-city" name="city" type="text" placeholder="New York" autocomplete="address-level2" required>
+        </div>
+        <div class="field-group">
+          <label for="f-zip">Postal Code *</label>
+          <input id="f-zip" name="zip" type="text" placeholder="10001" autocomplete="postal-code" required>
+        </div>
+        <div class="field-group field-full">
+          <label for="f-country">Country *</label>
+          <select id="f-country" name="country" autocomplete="country" required>
+            <option value="">Select country…</option>
+            <option value="DE">Germany</option>
+            <option value="FR">France</option>
+            <option value="IT">Italy</option>
+            <option value="ES">Spain</option>
+            <option value="NL">Netherlands</option>
+            <option value="BE">Belgium</option>
+            <option value="PL">Poland</option>
+            <option value="AT">Austria</option>
+            <option value="SE">Sweden</option>
+            <option value="CH">Switzerland</option>
+            <option value="GB">United Kingdom</option>
+            <option value="US">United States</option>
+            <option value="CA">Canada</option>
+            <option value="AU">Australia</option>
+            <option value="RU">Russia</option>
+            <option value="UA">Ukraine</option>
+            <option value="KZ">Kazakhstan</option>
+            <option value="OTHER">Other</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="checkout-actions">
+      <a href="catalog.html" class="btn-back">
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5L5 9l4 4"/></svg>
+        Back to Shop
+      </a>
+      <button type="submit" class="btn-checkout-next">Continue to Payment &rarr;</button>
+    </div>
+  </form>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════
+     STEP 2 — PAYMENT
+═══════════════════════════════════════════════════════════ -->
+<section class="checkout-step" id="step-2">
+  <div class="checkout-grid">
+
+    <!-- Order Summary -->
+    <div class="order-summary">
+      <div class="order-summary-header">Order Summary</div>
+      <div class="order-items" id="order-items">
+        <!-- Rendered by checkout.js -->
+      </div>
+      <div class="order-totals">
+        <div class="totals-row">
+          <span class="label">Subtotal</span>
+          <span class="value" id="summary-subtotal">€ 0</span>
+        </div>
+        <div class="totals-row">
+          <span class="label">Shipping</span>
+          <span class="value shipping-free">FREE</span>
+        </div>
+        <div class="totals-row is-total">
+          <span class="label">Total</span>
+          <span class="value" id="summary-total">€ 0</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Payment Form -->
+    <div class="payment-form-wrap">
+      <p class="payment-form-title">Payment Details</p>
+
+      <!-- Delivery recap -->
+      <div class="delivery-recap" id="delivery-recap">
+        <!-- Filled by checkout.js -->
+      </div>
+      <button class="delivery-recap-edit" id="edit-delivery" type="button">Edit delivery info</button>
+
+      <form id="form-payment" novalidate style="margin-top: var(--sp-5);">
+        <p class="demo-notice">Demo mode — no real payment is processed</p>
+
+        <!-- Card logos -->
+        <div class="card-brand-row">
+          <div class="card-brand visa">VISA</div>
+          <div class="card-brand mc">MC</div>
+          <div class="card-brand amex">AMEX</div>
+        </div>
+
+        <div class="field-group" style="margin-bottom: var(--sp-3);">
+          <label for="p-card">Card Number</label>
+          <div class="card-input-wrap">
+            <input id="p-card" name="card-number" type="text" inputmode="numeric" placeholder="0000 0000 0000 0000" autocomplete="cc-number" maxlength="19">
+            <span class="card-type-icon" id="card-icon">💳</span>
+          </div>
+        </div>
+
+        <div class="card-row" style="margin-bottom: var(--sp-3);">
+          <div class="field-group">
+            <label for="p-expiry">Expiry</label>
+            <input id="p-expiry" name="expiry" type="text" inputmode="numeric" placeholder="MM / YY" autocomplete="cc-exp" maxlength="7">
+          </div>
+          <div class="field-group">
+            <label for="p-cvv">CVV</label>
+            <input id="p-cvv" name="cvv" type="text" inputmode="numeric" placeholder="&bull;&bull;&bull;" autocomplete="cc-csc" maxlength="4">
+          </div>
+        </div>
+
+        <div class="field-group" style="margin-bottom: var(--sp-6);">
+          <label for="p-name">Name on Card</label>
+          <input id="p-name" name="card-name" type="text" placeholder="JOHN DOE" autocomplete="cc-name">
+        </div>
+
+        <div class="checkout-actions">
+          <button type="button" class="btn-back" id="back-to-delivery">
+            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5L5 9l4 4"/></svg>
+            Back
+          </button>
+          <button type="submit" class="btn-checkout-next">Place Order &rarr;</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════
+     STEP 3 — CONFIRMED
+═══════════════════════════════════════════════════════════ -->
+<section class="checkout-step" id="step-3">
+  <div class="checkout-confirmation">
+    <div class="confirmation-icon">
+      <svg width="36" height="36" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+    </div>
+
+    <h1 class="confirmation-title">Order Placed!</h1>
+    <div class="confirmation-order-num" id="conf-order-num">MP-XXXXXXXX</div>
+
+    <p class="confirmation-text">
+      Thank you for your purchase.<br>
+      A confirmation email has been sent to <span class="confirmation-email" id="conf-email"></span>
+    </p>
+
+    <div class="confirmation-total">
+      Total: <span id="conf-total"></span>
+    </div>
+
+    <p class="confirmation-text" style="font-size:0.8125rem;">
+      Your order will be processed within 1–2 business days.<br>
+      Estimated delivery: <strong style="color:var(--color-text)">5–10 business days</strong>
+    </p>
+
+    <div class="confirmation-actions">
+      <a href="catalog.html" class="btn-continue-shopping">Continue Shopping</a>
+      <a href="account.html" class="btn-view-account" id="conf-account-link" style="display:none">View my orders &rarr;</a>
+    </div>
+  </div>
+</section>
+
+<!-- ── Toast ───────────────────────────────────────────────── -->
+<div id="mp-toast" class="toast" role="alert" aria-live="polite">
+  <span class="toast-icon"></span>
+  <span class="toast-msg"></span>
+  <button class="toast-close" aria-label="Close">&times;</button>
+</div>
+
+<!-- ── Scripts ─────────────────────────────────────────────── -->
+<script src="js/config.js"></script>
+<script src="js/supabase-client.js"></script>
+<script src="js/utils.js"></script>
+<script src="js/app.js"></script>
+<script src="js/checkout.js"></script>
+
+</body>
+</html>
