@@ -358,7 +358,7 @@ document.addEventListener('DOMContentLoaded', function () {
         showToast('Your bag is empty', '&#128717;');
         return;
       }
-      showToast('Checkout coming soon! Total: ' + formatPrice(Cart.getSubtotal()), '&#128717;');
+      window.location.href = 'checkout.html';
     });
   }
 
