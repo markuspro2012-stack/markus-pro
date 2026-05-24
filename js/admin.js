@@ -186,14 +186,11 @@
     Promise.all([
       api('GET', 'products'),
       api('GET', 'orders'),
-      api('GET', 'settings'),
       api('GET', 'log')
     ]).then(function (results) {
       state.products = (results[0] || []).map(fromDB);
       state.orders   = results[1] || [];
-      var settingsMap = results[2] || {};
-      state.settings = { ticker: settingsMap.ticker || '' };
-      state.log = (results[3] || []).map(function (e) {
+      state.log = (results[2] || []).map(function (e) {
         return { msg: e.action, ts: new Date(e.created_at).getTime() };
       });
 
@@ -229,7 +226,6 @@
     if (section === 'products')   renderProducts();
     if (section === 'orders')     renderOrders();
     if (section === 'promotions') renderPromotions();
-    if (section === 'settings')   renderSettings();
 
     document.getElementById('admin-sidebar').classList.remove('is-open');
     document.getElementById('sidebar-overlay').classList.remove('is-visible');
@@ -806,63 +802,6 @@
     }).catch(function (err) { showToast('Error: ' + err.message, 'error'); });
   }
 
-  /* ── Settings ──────────────────────────────────────────── */
-
-  function renderSettings() {
-    var el = document.getElementById('setting-ticker');
-    if (el) el.value = state.settings.ticker || '';
-  }
-
-  function doSaveSettings() {
-    var ticker = (document.getElementById('setting-ticker').value || '').trim();
-    api('PUT', 'settings', { ticker: ticker }).then(function () {
-      state.settings.ticker = ticker;
-      showToast('Settings saved', 'success');
-    }).catch(function (err) { showToast('Save failed: ' + err.message, 'error'); });
-  }
-
-  function doChangePassword() {
-    showToast('Admin password is managed via Netlify environment variables (MP_ADMIN_SECRET)', 'info');
-  }
-
-  function doExport() {
-    var blob = new Blob([JSON.stringify(state.products, null, 2)], { type: 'application/json' });
-    var url  = URL.createObjectURL(blob);
-    var a    = document.createElement('a');
-    a.href     = url;
-    a.download = 'markuspro-products-' + new Date().toISOString().slice(0, 10) + '.json';
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 500);
-    showToast('Products exported', 'success');
-  }
-
-  function doImport(file) {
-    var reader = new FileReader();
-    reader.onload = function (e) {
-      try {
-        var data = JSON.parse(e.target.result);
-        if (!Array.isArray(data)) throw new Error('not array');
-        showConfirm('Import Products',
-          'Import ' + data.length + ' products into the database?',
-          function () {
-            var inserts = data.map(function (p) { return api('POST', 'products', toDB(p)); });
-            Promise.all(inserts).then(function (saved) {
-              saved.forEach(function (s) { state.products.push(fromDB(s)); });
-              renderCounts();
-              showToast(saved.length + ' products imported', 'success');
-              if (state.section === 'products') renderProducts();
-            }).catch(function (err) { showToast('Import failed: ' + err.message, 'error'); });
-          }
-        );
-      } catch (err) { showToast('Invalid JSON file', 'error'); }
-    };
-    reader.readAsText(file);
-  }
-
-  function doReset() {
-    showToast('Reset not available: products are in Supabase. Delete them manually from the admin panel.', 'info');
-  }
 
   /* ── Confirm modal ─────────────────────────────────────── */
 
@@ -1098,16 +1037,6 @@
       });
     }
 
-    var ss  = document.getElementById('btn-save-settings');
-    var cp  = document.getElementById('btn-change-pass');
-    var ex  = document.getElementById('btn-export');
-    var imp = document.getElementById('btn-import');
-    var rst = document.getElementById('btn-reset');
-    if (ss)  ss.addEventListener('click',  doSaveSettings);
-    if (cp)  cp.addEventListener('click',  doChangePassword);
-    if (ex)  ex.addEventListener('click',  doExport);
-    if (imp) imp.addEventListener('change', function () { if (this.files[0]) doImport(this.files[0]); this.value = ''; });
-    if (rst) rst.addEventListener('click', doReset);
 
     document.querySelectorAll('.quick-btn[data-action]').forEach(function (btn) {
       btn.addEventListener('click', function () {
