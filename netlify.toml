@@ -23,5 +23,10 @@
   to     = "/.netlify/functions/admin/:splat"
   status = 200
 
+[[redirects]]
+  from   = "/api/checkout"
+  to     = "/.netlify/functions/checkout"
+  status = 200
+
 [functions]
   node_bundler = "esbuild"
