@@ -1,0 +1,12 @@
+{
+  "name": "markus-pro",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/inject-config.js",
+    "dev": "node _server.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.0"
+  }
+}
