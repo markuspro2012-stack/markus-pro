@@ -1,19 +1,14 @@
 /* ============================================================
    MARKUS PRO — Admin Panel Logic
-   Auth via sessionStorage. Data via localStorage.
-   Reads DEFAULT_PRODUCTS from products.js (loaded before this).
+   Auth: client-side session via sessionStorage.
+   Data: Supabase via Netlify Function /api/admin/*
 ============================================================ */
 (function () {
   'use strict';
 
   /* ── Constants ─────────────────────────────────────────── */
-  var PASS_KEY     = 'mp_admin_pass';
-  var SESSION_KEY  = 'mp_admin_session';
-  var PRODUCTS_KEY = 'mp_products';
-  var ORDERS_KEY   = 'mp_orders';
-  var SETTINGS_KEY = 'mp_settings';
-  var LOG_KEY      = 'mp_admin_log';
-  var DEFAULT_PASS = 'markuspro2026';
+  var SESSION_KEY = 'mp_admin_session';
+  var API_BASE    = '/api/admin';
 
   var SIZES_BY_CAT = {
     tshirts:  ['XS', 'S', 'M', 'L', 'XL', '2XL'],
@@ -29,7 +24,6 @@
     socks:    'Socks'
   };
 
-  /* order status → CSS modifier */
   var STATUS_CSS = {
     pending:   'warning',
     confirmed: 'blue',
@@ -58,7 +52,79 @@
   var confirmCallback = null;
   var toastTimer;
 
+  /* ── API helpers ───────────────────────────────────────── */
+
+  function apiSecret() {
+    return (window.__MP_CONFIG || {}).adminSecret || 'markuspro2026';
+  }
+
+  function api(method, path, body) {
+    var opts = {
+      method: method,
+      headers: {
+        'Content-Type':   'application/json',
+        'x-admin-secret': apiSecret()
+      }
+    };
+    if (body !== undefined) opts.body = JSON.stringify(body);
+    return fetch(API_BASE + '/' + path, opts).then(function (r) {
+      return r.json().then(function (data) {
+        if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+        return data;
+      });
+    });
+  }
+
+  /* ── DB ↔ internal mapping ─────────────────────────────── */
+
+  function fromDB(p) {
+    return {
+      id:            p.id,
+      name:          p.name          || '',
+      category:      p.category      || '',
+      categoryLabel: CAT_LABELS[p.category] || p.category || '',
+      price:         p.price         || 0,
+      originalPrice: p.original_price != null ? p.original_price : null,
+      tag:           p.tag           || null,
+      active:        p.active        !== false,
+      featured:      !!p.featured,
+      image:         p.image         || ('https://picsum.photos/seed/mp' + p.id + '/600/750'),
+      images:        p.image         ? [p.image] : [],
+      sku:           p.sku           || '',
+      sizes:         p.sizes         || [],
+      soldOut:       [],
+      stock:         p.stock         || 0,
+      description:   p.description   || ''
+    };
+  }
+
+  function toDB(p) {
+    return {
+      name:           p.name,
+      category:       p.category,
+      price:          p.price,
+      original_price: p.originalPrice != null && !isNaN(p.originalPrice) ? p.originalPrice : null,
+      tag:            p.tag           || null,
+      active:         p.active        !== false,
+      featured:       !!p.featured,
+      image:          p.image         || null,
+      sku:            p.sku           || null,
+      sizes:          p.sizes         || [],
+      stock:          p.stock         || 0,
+      description:    p.description   || null
+    };
+  }
+
+  function orderDate(o) {
+    return o.created_at ? new Date(o.created_at).getTime() : (o.date || Date.now());
+  }
+
+  function orderCustomer(o) {
+    return o.customer_name || o.customer || '—';
+  }
+
   /* ── Utilities ─────────────────────────────────────────── */
+
   function escHtml(v) {
     if (v == null) return '';
     return String(v)
@@ -75,17 +141,6 @@
     };
   }
 
-  function store(key, val) {
-    try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {}
-  }
-
-  function load(key, fallback) {
-    try { var r = localStorage.getItem(key); if (r) return JSON.parse(r); } catch (e) {}
-    return fallback;
-  }
-
-  function getPass() { return localStorage.getItem(PASS_KEY) || DEFAULT_PASS; }
-
   function fmtDate(ts) {
     return new Date(ts).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
   }
@@ -94,28 +149,19 @@
 
   function setText(id, val) { var e = document.getElementById(id); if (e) e.textContent = val; }
 
-  function nextId() {
-    if (!state.products.length) return 1;
-    return Math.max.apply(null, state.products.map(function (p) { return p.id || 0; })) + 1;
-  }
-
-  function logActivity(msg) {
-    state.log.unshift({ msg: msg, ts: Date.now() });
-    if (state.log.length > 50) state.log.length = 50;
-    store(LOG_KEY, state.log);
-  }
-
   /* ── Auth ──────────────────────────────────────────────── */
+
   function isAuthed() { return sessionStorage.getItem(SESSION_KEY) === '1'; }
 
   function doLogin(pass) {
-    if (pass === getPass()) { sessionStorage.setItem(SESSION_KEY, '1'); return true; }
+    if (pass === apiSecret()) { sessionStorage.setItem(SESSION_KEY, '1'); return true; }
     return false;
   }
 
   function doLogout() { sessionStorage.removeItem(SESSION_KEY); location.reload(); }
 
   /* ── Init ──────────────────────────────────────────────── */
+
   function init() {
     var dateEl = document.getElementById('topbar-date');
     if (dateEl) {
@@ -135,23 +181,36 @@
     document.getElementById('auth-gate').style.display = 'none';
     document.getElementById('admin-app').style.display = '';
 
-    var stored = load(PRODUCTS_KEY, null);
-    state.products = (Array.isArray(stored) && stored.length)
-      ? stored
-      : DEFAULT_PRODUCTS.map(function (p) { return Object.assign({}, p); });
+    showToast('Loading data…', 'info');
 
-    state.orders   = load(ORDERS_KEY, []);
-    state.settings = load(SETTINGS_KEY, {
-      ticker: 'FREE SHIPPING ON ORDERS OVER €50\nNEW COLLECTION JUST DROPPED\nFREE RETURNS WITHIN 14 DAYS'
+    Promise.all([
+      api('GET', 'products'),
+      api('GET', 'orders'),
+      api('GET', 'settings'),
+      api('GET', 'log')
+    ]).then(function (results) {
+      state.products = (results[0] || []).map(fromDB);
+      state.orders   = results[1] || [];
+      var settingsMap = results[2] || {};
+      state.settings = { ticker: settingsMap.ticker || '' };
+      state.log = (results[3] || []).map(function (e) {
+        return { msg: e.action, ts: new Date(e.created_at).getTime() };
+      });
+
+      renderCounts();
+      navigateTo('dashboard');
+      bindApp();
+    }).catch(function (err) {
+      showToast('Failed to load: ' + err.message, 'error');
+      /* Still bind UI so admin can at least navigate */
+      renderCounts();
+      navigateTo('dashboard');
+      bindApp();
     });
-    state.log = load(LOG_KEY, []);
-
-    renderCounts();
-    navigateTo('dashboard');
-    bindApp();
   }
 
   /* ── Navigation ────────────────────────────────────────── */
+
   function navigateTo(section) {
     state.section = section;
     state.page    = 1;
@@ -182,19 +241,17 @@
   }
 
   /* ── Dashboard ─────────────────────────────────────────── */
+
   function renderDashboard() {
     var total  = state.products.length;
     var active = state.products.filter(function (p) { return p.active !== false; }).length;
-    var oos    = state.products.filter(function (p) {
-      return p.soldOut && p.sizes && p.sizes.length > 0 && p.soldOut.length >= p.sizes.length;
-    }).length;
+    var oos    = state.products.filter(function (p) { return (p.stock || 0) === 0; }).length;
 
     setText('kpi-total',  total);
     setText('kpi-active', active);
     setText('kpi-low',    oos);
     setText('kpi-orders', state.orders.length);
 
-    /* category stats bars */
     var cats = {};
     state.products.forEach(function (p) {
       var k = p.category || 'other';
@@ -217,7 +274,6 @@
       }
     }
 
-    /* activity log */
     var logEl = document.getElementById('activity-log');
     if (logEl) {
       if (!state.log.length) {
@@ -234,6 +290,7 @@
   }
 
   /* ── Products — filter / sort / page ───────────────────── */
+
   function getFiltered() {
     var list = state.products.slice();
     var q    = state.search.toLowerCase().trim();
@@ -259,6 +316,7 @@
   }
 
   /* ── Products — render table ───────────────────────────── */
+
   function renderProducts() {
     var list  = getFiltered();
     var pages = Math.max(1, Math.ceil(list.length / state.perPage));
@@ -348,12 +406,12 @@
   }
 
   /* ── Product Modal ─────────────────────────────────────── */
+
   function openProductModal(id) {
     state.editId = id || null;
     var form     = document.getElementById('product-form');
     form.reset();
 
-    /* reset tabs to Basic */
     document.querySelectorAll('.form-tab').forEach(function (t) {
       t.classList.toggle('is-active', t.dataset.tab === 'basic');
     });
@@ -361,7 +419,6 @@
       p.classList.toggle('is-active', p.id === 'tab-basic');
     });
 
-    /* reset image preview */
     var prev = document.getElementById('img-preview-main');
     var ph   = document.getElementById('img-preview-placeholder');
     if (prev) { prev.style.display = 'none'; prev.src = ''; }
@@ -388,8 +445,8 @@
       setF(form, 'id',            p.id);
       form.elements['featured'].checked = !!p.featured;
       form.elements['active'].checked   = p.active !== false;
-      setF(form, 'image',         p.image    || '');
-      setF(form, 'imagesRaw',     (p.images  || []).join('\n'));
+      setF(form, 'image',    p.image    || '');
+      setF(form, 'imagesRaw', (p.images  || []).join('\n'));
 
       if (p.image) {
         if (prev) { prev.src = p.image; prev.style.display = ''; }
@@ -449,6 +506,7 @@
   }
 
   /* ── Save product ──────────────────────────────────────── */
+
   function saveProduct() {
     var form  = document.getElementById('product-form');
     var name  = form.elements['name'].value.trim();
@@ -465,73 +523,79 @@
     var featured = form.elements['featured'].checked;
     var active   = form.elements['active'].checked;
     var imgUrl   = form.elements['image'].value.trim();
-    var extras   = (form.elements['imagesRaw'].value.trim() || '')
-                     .split('\n').map(function (l) { return l.trim(); }).filter(Boolean);
-    var allImgs  = (imgUrl ? [imgUrl] : [])
-                     .concat(extras.filter(function (u) { return u !== imgUrl; }));
 
-    /* querySelectorAll returns NodeList — convert via slice */
-    var sizeCbs   = Array.prototype.slice.call(form.querySelectorAll('.size-available:checked'));
+    var sizeCbs    = Array.prototype.slice.call(form.querySelectorAll('.size-available:checked'));
     var soldOutCbs = Array.prototype.slice.call(form.querySelectorAll('.size-soldout:checked'));
-    var sizes     = sizeCbs.map(function (c) { return c.value; });
-    var soldOut   = soldOutCbs.map(function (c) { return c.value; });
+    var sizes      = sizeCbs.map(function (c) { return c.value; });
+    var soldOut    = soldOutCbs.map(function (c) { return c.value; });
 
-    var seed    = 'mp-' + Date.now();
     var product = {
-      id:            state.editId || nextId(),
       name:          name,
       category:      cat,
       categoryLabel: CAT_LABELS[cat] || cat,
       price:         price,
       originalPrice: (orig != null && !isNaN(orig)) ? orig : null,
       tag:           tag,
-      image:         imgUrl  || ('https://picsum.photos/seed/' + seed + '/600/750'),
-      images:        allImgs.length ? allImgs : ['https://picsum.photos/seed/' + seed + '/800/1000'],
+      image:         imgUrl || null,
+      images:        imgUrl ? [imgUrl] : [],
       sizes:         sizes,
       soldOut:       soldOut,
       featured:      featured,
       active:        active,
       description:   form.elements['description'].value.trim(),
-      details:       form.elements['details'].value.trim(),
-      shipping:      form.elements['shipping'].value.trim()  || 'Free shipping on orders over €50. Delivery 2–5 working days.',
-      returns:       form.elements['returns'].value.trim()   || 'Free returns within 14 days.',
-      sku:           form.elements['sku'].value.trim(),
-      collection:    form.elements['collection'].value.trim()
+      sku:           form.elements['sku'].value.trim()
     };
 
-    if (state.editId) {
-      var idx = state.products.findIndex(function (x) { return x.id === state.editId; });
-      if (idx >= 0) state.products[idx] = product; else state.products.push(product);
-      logActivity('Updated: ' + name);
-      showToast('Product updated', 'success');
-    } else {
-      state.products.push(product);
-      logActivity('Added: ' + name);
-      showToast('Product added', 'success');
-    }
+    var saveBtn = document.getElementById('modal-save');
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
 
-    store(PRODUCTS_KEY, state.products);
-    renderCounts();
-    closeProductModal();
-    renderProducts();
-    if (state.section === 'dashboard') renderDashboard();
+    var req = state.editId
+      ? api('PUT',  'products/' + state.editId, toDB(product))
+      : api('POST', 'products',                 toDB(product));
+
+    req.then(function (saved) {
+      if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save Product'; }
+      var p = fromDB(saved);
+      p.soldOut = soldOut;
+
+      if (state.editId) {
+        var idx = state.products.findIndex(function (x) { return x.id === state.editId; });
+        if (idx >= 0) state.products[idx] = p; else state.products.push(p);
+        showToast('Product updated', 'success');
+      } else {
+        state.products.push(p);
+        showToast('Product added', 'success');
+      }
+
+      renderCounts();
+      closeProductModal();
+      renderProducts();
+      if (state.section === 'dashboard') renderDashboard();
+    }).catch(function (err) {
+      if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save Product'; }
+      showToast('Save failed: ' + err.message, 'error');
+    });
   }
 
   /* ── Delete product ────────────────────────────────────── */
+
   function deleteProduct(id) {
     var p = state.products.find(function (x) { return x.id === id; });
     if (!p) return;
     showConfirm('Delete Product', 'Delete "' + p.name + '"? This cannot be undone.', function () {
-      state.products = state.products.filter(function (x) { return x.id !== id; });
-      state.selected.delete(id);
-      store(PRODUCTS_KEY, state.products);
-      logActivity('Deleted: ' + p.name);
-      renderCounts(); renderProducts();
-      showToast('Product deleted', 'success');
+      api('DELETE', 'products/' + id).then(function () {
+        state.products = state.products.filter(function (x) { return x.id !== id; });
+        state.selected.delete(id);
+        renderCounts(); renderProducts();
+        showToast('Product deleted', 'success');
+      }).catch(function (err) {
+        showToast('Delete failed: ' + err.message, 'error');
+      });
     });
   }
 
   /* ── Bulk actions ──────────────────────────────────────── */
+
   function doBulkAction(action) {
     var ids = [];
     state.selected.forEach(function (id) { ids.push(id); });
@@ -541,32 +605,41 @@
       showConfirm('Delete ' + ids.length + ' Products',
         'Permanently delete ' + ids.length + ' selected products?',
         function () {
-          state.products = state.products.filter(function (p) { return !state.selected.has(p.id); });
-          logActivity('Bulk deleted ' + ids.length + ' products');
-          state.selected.clear();
-          store(PRODUCTS_KEY, state.products);
-          renderCounts(); renderProducts();
-          showToast(ids.length + ' products deleted', 'success');
+          Promise.all(ids.map(function (id) { return api('DELETE', 'products/' + id); }))
+            .then(function () {
+              state.products = state.products.filter(function (p) { return !state.selected.has(p.id); });
+              state.selected.clear();
+              renderCounts(); renderProducts();
+              showToast(ids.length + ' products deleted', 'success');
+            }).catch(function (err) {
+              showToast('Bulk delete failed: ' + err.message, 'error');
+            });
         }
       );
       return;
     }
 
+    var updates = [];
     state.products.forEach(function (p) {
       if (!state.selected.has(p.id)) return;
-      if (action === 'activate')   p.active   = true;
-      if (action === 'deactivate') p.active   = false;
-      if (action === 'feature')    p.featured = true;
+      var patch = {};
+      if (action === 'activate')   { p.active   = true;  patch.active   = true; }
+      if (action === 'deactivate') { p.active   = false; patch.active   = false; }
+      if (action === 'feature')    { p.featured = true;  patch.featured = true; }
+      updates.push(api('PUT', 'products/' + p.id, patch));
     });
 
-    logActivity('Bulk ' + action + ': ' + ids.length + ' products');
-    state.selected.clear();
-    store(PRODUCTS_KEY, state.products);
-    renderCounts(); renderProducts();
-    showToast(ids.length + ' products updated', 'success');
+    Promise.all(updates).then(function () {
+      state.selected.clear();
+      renderCounts(); renderProducts();
+      showToast(ids.length + ' products updated', 'success');
+    }).catch(function (err) {
+      showToast('Bulk update failed: ' + err.message, 'error');
+    });
   }
 
   /* ── Orders ────────────────────────────────────────────── */
+
   function renderOrders() {
     var tbody = document.getElementById('orders-tbody');
     var empty = document.getElementById('orders-empty');
@@ -588,9 +661,9 @@
 
       return '<tr>'
         + '<td><span class="order-id">#' + escHtml(o.id) + '</span></td>'
-        + '<td class="order-date">' + escHtml(fmtDate(o.date)) + '</td>'
-        + '<td class="order-customer">' + escHtml(o.customer) + '</td>'
-        + '<td class="order-items">' + (o.items ? o.items.length : 0) + ' items</td>'
+        + '<td class="order-date">' + escHtml(fmtDate(orderDate(o))) + '</td>'
+        + '<td class="order-customer">' + escHtml(orderCustomer(o)) + '</td>'
+        + '<td class="order-items">' + ((o.items && o.items.length) || 0) + ' items</td>'
         + '<td class="order-total">€' + escHtml(o.total) + '</td>'
         + '<td><select class="status-select status-select--' + css + '" data-order-id="' + escHtml(o.id) + '">' + opts + '</select></td>'
         + '<td><button class="action-btn" data-action="view-order" data-order-id="' + escHtml(o.id) + '" title="View details">👁</button></td>'
@@ -599,32 +672,19 @@
   }
 
   function generateMockOrders() {
-    var names    = ['Alex Johnson', 'Maria Silva', 'Tom Brown', 'Sarah Lee', 'Dmitri Volkov', 'Emma García'];
-    var statuses = ['pending', 'confirmed', 'shipped', 'delivered'];
-    var now      = Date.now();
+    var btn = document.getElementById('btn-gen-orders');
+    if (btn) { btn.disabled = true; btn.textContent = 'Generating…'; }
 
-    for (var i = 0; i < 5; i++) {
-      var num   = Math.floor(Math.random() * 3) + 1;
-      var items = [];
-      for (var j = 0; j < num; j++) {
-        var rp = state.products[Math.floor(Math.random() * Math.max(state.products.length, 1))];
-        if (rp) items.push({ name: rp.name, price: rp.price });
-      }
-      var total = items.reduce(function (s, it) { return s + (it.price || 0); }, 0);
-      state.orders.push({
-        id:       'ORD-' + String(now + i).slice(-6),
-        date:     now - Math.random() * 30 * 86400000,
-        customer: names[Math.floor(Math.random() * names.length)],
-        items:    items,
-        total:    total,
-        status:   statuses[Math.floor(Math.random() * statuses.length)]
-      });
-    }
-
-    store(ORDERS_KEY, state.orders);
-    renderCounts(); renderOrders();
-    logActivity('Generated 5 mock orders');
-    showToast('5 mock orders generated', 'success');
+    api('POST', 'orders/generate', { count: 5 }).then(function (orders) {
+      if (btn) { btn.disabled = false; btn.textContent = 'Generate Mock Orders'; }
+      if (!Array.isArray(orders)) { showToast('No products in DB yet — add products first', 'error'); return; }
+      state.orders = orders.concat(state.orders);
+      renderCounts(); renderOrders();
+      showToast(orders.length + ' mock orders generated', 'success');
+    }).catch(function (err) {
+      if (btn) { btn.disabled = false; btn.textContent = 'Generate Mock Orders'; }
+      showToast('Generate failed: ' + err.message, 'error');
+    });
   }
 
   function viewOrder(id) {
@@ -637,10 +697,11 @@
 
     document.getElementById('order-modal-body').innerHTML =
         '<div class="order-detail">'
-      + '<div class="order-detail-row"><span>Order #</span><strong>' + escHtml(o.id)               + '</strong></div>'
-      + '<div class="order-detail-row"><span>Date</span><strong>'    + escHtml(fmtDate(o.date))    + '</strong></div>'
-      + '<div class="order-detail-row"><span>Customer</span><strong>' + escHtml(o.customer)        + '</strong></div>'
-      + '<div class="order-detail-row"><span>Status</span><strong>'  + cap(o.status)               + '</strong></div>'
+      + '<div class="order-detail-row"><span>Order #</span><strong>'   + escHtml(o.id)                           + '</strong></div>'
+      + '<div class="order-detail-row"><span>Date</span><strong>'      + escHtml(fmtDate(orderDate(o)))          + '</strong></div>'
+      + '<div class="order-detail-row"><span>Customer</span><strong>'  + escHtml(orderCustomer(o))               + '</strong></div>'
+      + '<div class="order-detail-row"><span>Email</span><strong>'     + escHtml(o.customer_email || '—')        + '</strong></div>'
+      + '<div class="order-detail-row"><span>Status</span><strong>'    + cap(o.status)                           + '</strong></div>'
       + '<hr class="order-hr">'
       + '<div class="order-items-list">' + rows + '</div>'
       + '<div class="order-detail-row order-detail-total"><span>Total</span><strong>€' + escHtml(o.total) + '</strong></div>'
@@ -656,6 +717,7 @@
   }
 
   /* ── Promotions ────────────────────────────────────────── */
+
   function renderPromotions() { renderFeaturedList(); }
 
   function renderFeaturedList() {
@@ -671,7 +733,7 @@
       + state.products.map(function (p) {
           return '<div class="featured-item">'
             + '<input type="checkbox" data-action="toggle-feature" data-id="' + p.id + '"' + (p.featured ? ' checked' : '') + '>'
-            + '<span class="featured-item-name">' + escHtml(p.name)                          + '</span>'
+            + '<span class="featured-item-name">' + escHtml(p.name)                           + '</span>'
             + '<span class="featured-item-cat">'  + escHtml(CAT_LABELS[p.category] || p.category || '') + '</span>'
             + '</div>';
         }).join('')
@@ -683,93 +745,84 @@
     var pct = parseFloat(document.getElementById('promo-discount').value);
     if (isNaN(pct) || pct <= 0 || pct >= 100) { showToast('Enter a valid discount % (1–99)', 'error'); return; }
 
-    var count = 0;
-    state.products.forEach(function (p) {
-      if (cat !== 'all' && p.category !== cat) return;
+    var targets = state.products.filter(function (p) { return cat === 'all' || p.category === cat; });
+    var updates = targets.map(function (p) {
       if (!p.originalPrice) p.originalPrice = p.price;
       p.price = Math.round(p.originalPrice * (1 - pct / 100));
       p.tag   = 'sale';
-      count++;
+      return api('PUT', 'products/' + p.id, { price: p.price, original_price: p.originalPrice, tag: 'sale' });
     });
-    store(PRODUCTS_KEY, state.products);
-    logActivity('Applied ' + pct + '% discount to ' + count + ' products');
-    showToast(count + ' products updated with ' + pct + '% discount', 'success');
-    if (state.section === 'products') renderProducts();
+
+    Promise.all(updates).then(function () {
+      showToast(targets.length + ' products updated with ' + pct + '% discount', 'success');
+      if (state.section === 'products') renderProducts();
+    }).catch(function (err) { showToast('Error: ' + err.message, 'error'); });
   }
 
   function removeDiscount() {
-    var cat   = document.getElementById('promo-remove-cat').value;
-    var count = 0;
-    state.products.forEach(function (p) {
-      if (cat !== 'all' && p.category !== cat) return;
-      if (p.originalPrice) { p.price = p.originalPrice; p.originalPrice = null; }
-      if (p.tag === 'sale') p.tag = null;
-      count++;
+    var cat     = document.getElementById('promo-remove-cat').value;
+    var targets = state.products.filter(function (p) {
+      return (cat === 'all' || p.category === cat) && p.originalPrice;
     });
-    store(PRODUCTS_KEY, state.products);
-    logActivity('Removed sale from ' + count + ' products');
-    showToast('Sale removed from ' + count + ' products', 'success');
-    if (state.section === 'products') renderProducts();
+    var updates = targets.map(function (p) {
+      p.price = p.originalPrice; p.originalPrice = null; if (p.tag === 'sale') p.tag = null;
+      return api('PUT', 'products/' + p.id, { price: p.price, original_price: null, tag: p.tag || null });
+    });
+
+    Promise.all(updates).then(function () {
+      showToast('Sale removed from ' + targets.length + ' products', 'success');
+      if (state.section === 'products') renderProducts();
+    }).catch(function (err) { showToast('Error: ' + err.message, 'error'); });
   }
 
   function applyBadge() {
-    var badge = document.getElementById('promo-badge').value;
-    var cat   = document.getElementById('promo-badge-cat').value;
-    var count = 0;
-    state.products.forEach(function (p) {
-      if (cat !== 'all' && p.category !== cat) return;
-      p.tag = badge; count++;
+    var badge   = document.getElementById('promo-badge').value;
+    var cat     = document.getElementById('promo-badge-cat').value;
+    var targets = state.products.filter(function (p) { return cat === 'all' || p.category === cat; });
+    var updates = targets.map(function (p) {
+      p.tag = badge;
+      return api('PUT', 'products/' + p.id, { tag: badge });
     });
-    store(PRODUCTS_KEY, state.products);
-    logActivity('Applied ' + badge.toUpperCase() + ' badge to ' + count + ' products');
-    showToast(badge.toUpperCase() + ' applied to ' + count + ' products', 'success');
-    if (state.section === 'products') renderProducts();
+
+    Promise.all(updates).then(function () {
+      showToast(badge.toUpperCase() + ' applied to ' + targets.length + ' products', 'success');
+      if (state.section === 'products') renderProducts();
+    }).catch(function (err) { showToast('Error: ' + err.message, 'error'); });
   }
 
   function clearBadges() {
-    var cat   = document.getElementById('promo-badge-cat').value;
-    var count = 0;
-    state.products.forEach(function (p) {
-      if (cat !== 'all' && p.category !== cat) return;
-      p.tag = null; count++;
+    var cat     = document.getElementById('promo-badge-cat').value;
+    var targets = state.products.filter(function (p) {
+      return (cat === 'all' || p.category === cat) && p.tag;
     });
-    store(PRODUCTS_KEY, state.products);
-    logActivity('Cleared badges from ' + count + ' products');
-    showToast('Badges cleared from ' + count + ' products', 'success');
-    if (state.section === 'products') renderProducts();
+    var updates = targets.map(function (p) {
+      p.tag = null;
+      return api('PUT', 'products/' + p.id, { tag: null });
+    });
+
+    Promise.all(updates).then(function () {
+      showToast('Badges cleared from ' + targets.length + ' products', 'success');
+      if (state.section === 'products') renderProducts();
+    }).catch(function (err) { showToast('Error: ' + err.message, 'error'); });
   }
 
   /* ── Settings ──────────────────────────────────────────── */
+
   function renderSettings() {
     var el = document.getElementById('setting-ticker');
     if (el) el.value = state.settings.ticker || '';
   }
 
   function doSaveSettings() {
-    state.settings.ticker = (document.getElementById('setting-ticker').value || '').trim();
-    store(SETTINGS_KEY, state.settings);
-    try {
-      localStorage.setItem('mp_ticker', JSON.stringify(
-        state.settings.ticker.split('\n').filter(Boolean)
-      ));
-    } catch (e) {}
-    logActivity('Store settings updated');
-    showToast('Settings saved', 'success');
+    var ticker = (document.getElementById('setting-ticker').value || '').trim();
+    api('PUT', 'settings', { ticker: ticker }).then(function () {
+      state.settings.ticker = ticker;
+      showToast('Settings saved', 'success');
+    }).catch(function (err) { showToast('Save failed: ' + err.message, 'error'); });
   }
 
   function doChangePassword() {
-    var cur  = document.getElementById('pass-current').value;
-    var nw   = document.getElementById('pass-new').value;
-    var conf = document.getElementById('pass-confirm').value;
-    if (cur !== getPass())  { showToast('Current password is incorrect', 'error');          return; }
-    if (nw.length < 6)      { showToast('New password must be at least 6 characters', 'error'); return; }
-    if (nw !== conf)        { showToast('Passwords do not match', 'error');                 return; }
-    localStorage.setItem(PASS_KEY, nw);
-    document.getElementById('pass-current').value = '';
-    document.getElementById('pass-new').value     = '';
-    document.getElementById('pass-confirm').value = '';
-    logActivity('Admin password changed');
-    showToast('Password updated', 'success');
+    showToast('Admin password is managed via Netlify environment variables (MP_ADMIN_SECRET)', 'info');
   }
 
   function doExport() {
@@ -781,7 +834,6 @@
     document.body.appendChild(a);
     a.click();
     setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 500);
-    logActivity('Exported products JSON');
     showToast('Products exported', 'success');
   }
 
@@ -792,14 +844,15 @@
         var data = JSON.parse(e.target.result);
         if (!Array.isArray(data)) throw new Error('not array');
         showConfirm('Import Products',
-          'Replace all current products with ' + data.length + ' imported products?',
+          'Import ' + data.length + ' products into the database?',
           function () {
-            state.products = data;
-            store(PRODUCTS_KEY, state.products);
-            renderCounts();
-            logActivity('Imported ' + data.length + ' products from file');
-            showToast(data.length + ' products imported', 'success');
-            if (state.section === 'products') renderProducts();
+            var inserts = data.map(function (p) { return api('POST', 'products', toDB(p)); });
+            Promise.all(inserts).then(function (saved) {
+              saved.forEach(function (s) { state.products.push(fromDB(s)); });
+              renderCounts();
+              showToast(saved.length + ' products imported', 'success');
+              if (state.section === 'products') renderProducts();
+            }).catch(function (err) { showToast('Import failed: ' + err.message, 'error'); });
           }
         );
       } catch (err) { showToast('Invalid JSON file', 'error'); }
@@ -808,21 +861,11 @@
   }
 
   function doReset() {
-    showConfirm('Reset to Defaults',
-      'Replace all products with the 8 default products? Orders will be kept.',
-      function () {
-        state.products = DEFAULT_PRODUCTS.map(function (p) { return Object.assign({}, p); });
-        store(PRODUCTS_KEY, state.products);
-        renderCounts();
-        logActivity('Reset products to defaults');
-        showToast('Products reset to defaults', 'success');
-        if (state.section === 'products')  renderProducts();
-        if (state.section === 'dashboard') renderDashboard();
-      }
-    );
+    showToast('Reset not available: products are in Supabase. Delete them manually from the admin panel.', 'info');
   }
 
   /* ── Confirm modal ─────────────────────────────────────── */
+
   function showConfirm(title, msg, cb) {
     confirmCallback = cb;
     setText('confirm-title',   title);
@@ -838,16 +881,18 @@
   }
 
   /* ── Toast ─────────────────────────────────────────────── */
+
   function showToast(msg, type) {
     var el = document.getElementById('admin-toast');
     if (!el) return;
     clearTimeout(toastTimer);
     el.textContent = msg;
     el.className   = 'admin-toast admin-toast--' + (type || 'info') + ' is-visible';
-    toastTimer = setTimeout(function () { el.classList.remove('is-visible'); }, 3000);
+    toastTimer = setTimeout(function () { el.classList.remove('is-visible'); }, 3500);
   }
 
   /* ── Tab switching ─────────────────────────────────────── */
+
   function switchTab(tab) {
     document.querySelectorAll('.form-tab').forEach(function (t) {
       t.classList.toggle('is-active', t.dataset.tab === tab);
@@ -858,6 +903,7 @@
   }
 
   /* ── Event bindings ────────────────────────────────────── */
+
   function bindAuth() {
     var form = document.getElementById('auth-form');
     if (!form) return;
@@ -876,45 +922,37 @@
   }
 
   function bindApp() {
-    /* logout */
     var logoutBtn = document.getElementById('admin-logout');
     if (logoutBtn) logoutBtn.addEventListener('click', doLogout);
 
-    /* mobile sidebar */
     var toggle  = document.getElementById('admin-menu-toggle');
     var sidebar = document.getElementById('admin-sidebar');
     var overlay = document.getElementById('sidebar-overlay');
     if (toggle)  toggle.addEventListener('click',  function () { sidebar.classList.toggle('is-open'); overlay.classList.toggle('is-visible'); });
     if (overlay) overlay.addEventListener('click', function () { sidebar.classList.remove('is-open'); overlay.classList.remove('is-visible'); });
 
-    /* nav items */
     document.querySelectorAll('.admin-nav-item[data-section]').forEach(function (b) {
       b.addEventListener('click', function () { navigateTo(this.dataset.section); });
     });
 
-    /* add product button */
     var addBtn = document.getElementById('btn-add-product');
     if (addBtn) addBtn.addEventListener('click', function () { openProductModal(null); });
 
-    /* search */
     var searchEl = document.getElementById('product-search');
     if (searchEl) {
       var dSearch = debounce(function () { state.search = searchEl.value; state.page = 1; renderProducts(); }, 280);
       searchEl.addEventListener('input', dSearch);
     }
 
-    /* filter by category */
     var filterEl = document.getElementById('product-filter-cat');
     if (filterEl) filterEl.addEventListener('change', function () { state.filterCat = this.value; state.page = 1; renderProducts(); });
 
-    /* sort */
     var sortEl = document.getElementById('product-sort');
     if (sortEl) sortEl.addEventListener('change', function () {
       var parts = this.value.split('-');
       state.sortKey = parts[0]; state.sortDir = parts[1] || 'asc'; state.page = 1; renderProducts();
     });
 
-    /* check-all */
     var checkAll = document.getElementById('check-all');
     if (checkAll) {
       checkAll.addEventListener('change', function () {
@@ -924,7 +962,6 @@
       });
     }
 
-    /* products tbody delegation */
     var tbody = document.getElementById('products-tbody');
     if (tbody) {
       tbody.addEventListener('change', function (e) {
@@ -944,21 +981,18 @@
       });
     }
 
-    /* bulk bar */
     var bulkClear = document.getElementById('bulk-clear');
     if (bulkClear) bulkClear.addEventListener('click', function () { state.selected.clear(); renderProducts(); });
     document.querySelectorAll('[data-bulk]').forEach(function (b) {
       b.addEventListener('click', function () { doBulkAction(this.dataset.bulk); });
     });
 
-    /* pagination */
     var pag = document.getElementById('products-pagination');
     if (pag) pag.addEventListener('click', function (e) {
       var b = e.target.closest('.page-btn');
       if (b) { state.page = parseInt(b.dataset.page, 10); renderProducts(); }
     });
 
-    /* product modal controls */
     var mClose  = document.getElementById('modal-close');
     var mCancel = document.getElementById('modal-cancel');
     var mSave   = document.getElementById('modal-save');
@@ -969,12 +1003,10 @@
     var pModal = document.getElementById('product-modal');
     if (pModal) pModal.addEventListener('click', function (e) { if (e.target === pModal) closeProductModal(); });
 
-    /* form tabs */
     document.querySelectorAll('.form-tab').forEach(function (t) {
       t.addEventListener('click', function () { switchTab(this.dataset.tab); });
     });
 
-    /* product form: category → rebuild sizes */
     var pForm = document.getElementById('product-form');
     if (pForm) {
       pForm.elements['category'].addEventListener('change', function () {
@@ -982,7 +1014,6 @@
         buildSizesGrid(this.value, p ? (p.sizes || []) : [], p ? (p.soldOut || []) : []);
       });
 
-      /* image preview */
       pForm.elements['image'].addEventListener('input', function () {
         var url  = this.value.trim();
         var prev = document.getElementById('img-preview-main');
@@ -991,7 +1022,6 @@
         else     { if (prev) { prev.style.display = 'none'; prev.src = ''; } if (ph) ph.style.display = ''; }
       });
 
-      /* price preview */
       var upd = function () {
         updatePricePreview(
           pForm.elements['price'].value         || null,
@@ -1004,7 +1034,6 @@
       pForm.elements['tag'].addEventListener('change',          upd);
     }
 
-    /* confirm modal */
     var cOk  = document.getElementById('confirm-ok');
     var cCan = document.getElementById('confirm-cancel');
     if (cOk)  cOk.addEventListener('click',  function () { if (confirmCallback) confirmCallback(); closeConfirm(); });
@@ -1012,7 +1041,6 @@
     var cModal = document.getElementById('confirm-modal');
     if (cModal) cModal.addEventListener('click', function (e) { if (e.target === cModal) closeConfirm(); });
 
-    /* orders tbody delegation */
     var ot = document.getElementById('orders-tbody');
     if (ot) {
       ot.addEventListener('click', function (e) {
@@ -1022,22 +1050,21 @@
       ot.addEventListener('change', function (e) {
         var sel = e.target;
         if (sel.classList.contains('status-select')) {
-          var o = state.orders.find(function (x) { return x.id === sel.dataset.orderId; });
-          if (o) {
-            o.status      = sel.value;
-            sel.className = 'status-select status-select--' + (STATUS_CSS[sel.value] || 'warning');
-            store(ORDERS_KEY, state.orders);
+          var newStatus = sel.value;
+          var ordId     = sel.dataset.orderId;
+          api('PUT', 'orders/' + ordId, { status: newStatus }).then(function () {
+            var o = state.orders.find(function (x) { return x.id === ordId; });
+            if (o) o.status = newStatus;
+            sel.className = 'status-select status-select--' + (STATUS_CSS[newStatus] || 'warning');
             showToast('Order status updated', 'success');
-          }
+          }).catch(function (err) { showToast('Update failed: ' + err.message, 'error'); });
         }
       });
     }
 
-    /* generate mock orders */
     var genBtn = document.getElementById('btn-gen-orders');
     if (genBtn) genBtn.addEventListener('click', generateMockOrders);
 
-    /* order modal close */
     var om  = document.getElementById('order-modal');
     var oc1 = document.getElementById('order-modal-close');
     var oc2 = document.getElementById('order-modal-close2');
@@ -1045,7 +1072,6 @@
     if (oc2) oc2.addEventListener('click', closeOrderModal);
     if (om)  om.addEventListener('click', function (e) { if (e.target === om) closeOrderModal(); });
 
-    /* promotions buttons */
     var ad = document.getElementById('btn-apply-discount');
     var rd = document.getElementById('btn-remove-discount');
     var ab = document.getElementById('btn-apply-badge');
@@ -1055,7 +1081,6 @@
     if (ab) ab.addEventListener('click', applyBadge);
     if (rb) rb.addEventListener('click', clearBadges);
 
-    /* featured list — toggle feature via checkbox */
     var fl = document.getElementById('featured-list');
     if (fl) {
       fl.addEventListener('change', function (e) {
@@ -1065,14 +1090,14 @@
           var p  = state.products.find(function (x) { return x.id === id; });
           if (p) {
             p.featured = cb.checked;
-            store(PRODUCTS_KEY, state.products);
-            showToast(p.name + (cb.checked ? ' added to featured' : ' removed from featured'), 'success');
+            api('PUT', 'products/' + id, { featured: p.featured }).then(function () {
+              showToast(p.name + (cb.checked ? ' added to featured' : ' removed from featured'), 'success');
+            });
           }
         }
       });
     }
 
-    /* settings */
     var ss  = document.getElementById('btn-save-settings');
     var cp  = document.getElementById('btn-change-pass');
     var ex  = document.getElementById('btn-export');
@@ -1084,7 +1109,6 @@
     if (imp) imp.addEventListener('change', function () { if (this.files[0]) doImport(this.files[0]); this.value = ''; });
     if (rst) rst.addEventListener('click', doReset);
 
-    /* dashboard quick-action buttons */
     document.querySelectorAll('.quick-btn[data-action]').forEach(function (btn) {
       btn.addEventListener('click', function () {
         var action = this.dataset.action;
@@ -1095,7 +1119,6 @@
       });
     });
 
-    /* ESC closes any open modal */
     document.addEventListener('keydown', function (e) {
       if (e.key !== 'Escape') return;
       if (document.getElementById('product-modal').style.display !== 'none') closeProductModal();
@@ -1105,6 +1128,7 @@
   }
 
   /* ── Boot ──────────────────────────────────────────────── */
+
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
   } else {
